@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 import random
 
@@ -40,6 +40,9 @@ BAC_TIPS = [
     "La lecture expressive, c'est ton graphique animé : elle rend la structure visible.",
 ]
 
+# Chats destinataires abonnées aux rappels quotidiens
+SUBSCRIBED_CHAT_IDS: set[int] = set()
+
 
 def format_time_delta(delta: timedelta) -> str:
     """Formate un objet timedelta en chaîne lisible indiquant j/h/m/s."""
@@ -78,6 +81,10 @@ async def bac_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
     )
 
+    # Abonne le chat courant aux rappels quotidiens
+    if update.effective_chat:
+        SUBSCRIBED_CHAT_IDS.add(update.effective_chat.id)
+
 
 async def revise_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Rappelle à l'utilisateur @mkyDnys de réviser."""
@@ -114,6 +121,9 @@ async def mention_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                         f"Bon courage @mkyDnys !"
                     )
                 )
+
+                # Abonne le chat où la mention a eu lieu
+                SUBSCRIBED_CHAT_IDS.add(message.chat_id)
                 break
 
 
@@ -126,6 +136,31 @@ def main() -> None:
 
     # Handler pour les @mentions
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mention_handler))
+
+    # Planification du rappel quotidien à 7h UTC
+    async def daily_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+        now = datetime.now(ZoneInfo("Europe/Paris"))
+        delta = BAC_DATETIME - now
+        countdown_text = format_time_delta(delta)
+        days_remaining = max(delta.days, 0)
+
+        for chat_id in list(SUBSCRIBED_CHAT_IDS):
+            try:
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"⏳ Il reste {countdown_text} avant l'épreuve de Bac de Français 📚\n\n"
+                        f"Bon courage @mkyDnys ! Encore {days_remaining} jour{'s' if days_remaining != 1 else ''} de révision."
+                    ),
+                )
+            except Exception as e:  # pragma: no cover
+                # Si l'envoi échoue (chat supprimé/bot bloqué), on retire l'id
+                SUBSCRIBED_CHAT_IDS.discard(chat_id)
+
+    application.job_queue.run_daily(
+        daily_reminder,
+        time=dt_time(hour=7, minute=0, tzinfo=ZoneInfo("UTC")),
+    )
 
     # Démarrage du bot
     print("Bot lancé. Appuyez sur Ctrl+C pour arrêter.")
